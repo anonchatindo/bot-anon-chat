@@ -1,0 +1,9 @@
+{
+  "name": "bot-anon",
+  "version": "1.0.0",
+  "main": "index.js",
+  "dependencies": {
+    "telegraf": "^4.15.0",
+    "mongodb": "^6.3.0"
+  }
+}
