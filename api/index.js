@@ -14,13 +14,39 @@ async function connectDB() {
     return db;
 }
 
-// 1. START: Registrasi Profil User Sendiri
+// Fungsi pembantu untuk mencocokkan user berdasarkan filter yang sudah disimpan
+async function matchUser(ctx, usersCollection, user) {
+    let freePartner = await usersCollection.findOne({
+        searching: true,
+        gender: user.targetGender,
+        age: user.targetAge,
+        targetGender: user.gender,
+        targetAge: user.age,
+        _id: { $ne: ctx.chat.id }
+    });
+
+    const infoTeks = "\n\n📌 **Navigasi Chat:**\n• Ketik /next - cari orang baru (filter sama)\n• Ketik /new - cari pakai filter baru\n• Ketik /stop - berhenti mengobrol";
+
+    if (freePartner) {
+        await usersCollection.updateOne({ _id: ctx.chat.id }, { $set: { partner: freePartner._id, searching: false } });
+        await usersCollection.updateOne({ _id: freePartner._id }, { $set: { partner: ctx.chat.id, searching: false } });
+        
+        await bot.telegram.sendMessage(ctx.chat.id, "🎉 **Pasangan ditemukan! Selamat mengobrol!**" + infoTeks, { parse_mode: 'Markdown' });
+        await bot.telegram.sendMessage(freePartner._id, "🎉 **Pasangan ditemukan! Selamat mengobrol!**" + infoTeks, { parse_mode: 'Markdown' });
+        return true;
+    } else {
+        await usersCollection.updateOne({ _id: ctx.chat.id }, { $set: { searching: true } });
+        return false;
+    }
+}
+
+// 1. START: Registrasi Profil Diri Sendiri
 bot.command('start', async (ctx) => {
     try {
         const usersCollection = await connectDB();
         await usersCollection.updateOne(
             { _id: ctx.chat.id },
-            { $set: { searching: false, partner: null, targetGender: null } },
+            { $set: { searching: false, partner: null, targetGender: null, targetAge: null } },
             { upsert: true }
         );
 
@@ -36,7 +62,6 @@ bot.command('start', async (ctx) => {
     }
 });
 
-// 2. RESPONSE GENDER ASLI -> PILIH USIA ASLI
 bot.action(/set_mygender_(.+)/, async (ctx) => {
     try {
         const gender = ctx.match[1];
@@ -58,7 +83,6 @@ bot.action(/set_mygender_(.+)/, async (ctx) => {
     }
 });
 
-// 3. RESPONSE USIA ASLI -> REGISTRASI SELESAI
 bot.action(/set_myage_(.+)/, async (ctx) => {
     try {
         const ageGroup = ctx.match[1];
@@ -67,14 +91,14 @@ bot.action(/set_myage_(.+)/, async (ctx) => {
 
         await ctx.answerCbQuery();
         await ctx.editMessageText(
-            "🎉 Profil kamu sudah lengkap disimpan di database!\n\nSekarang ketik atau pencet perintah **`/search`** untuk memfilter siapa yang mau kamu cari hari ini!",
+            "🎉 Profil kamu berhasil disimpan!\n\nSekarang ketik **`/search`** untuk mengatur filter pasangan yang ingin kamu cari.",
         );
     } catch (err) {
         console.error(err);
     }
 });
 
-// 4. COMMAND /SEARCH: Tanyakan Ingin Mencari Siapa (Filter Gender Target)
+// 2. SEARCH: Langkah 1 - Pilih Gender Target
 bot.command('search', async (ctx) => {
     try {
         const usersCollection = await connectDB();
@@ -84,13 +108,13 @@ bot.command('search', async (ctx) => {
             return ctx.reply("Kamu belum mengisi profil lengkap! Silakan ketik /start terlebih dahulu.");
         }
 
-        if (user.partner) return ctx.reply("Kamu masih dalam obrolan aktif! Ketik /stop untuk menyudahi.");
+        if (user.partner) return ctx.reply("Kamu masih dalam obrolan aktif! Ketik /stop atau /next.");
         
         await ctx.reply(
-            "Mau cari pasangan chat gender apa nih?",
+            "Filter Pencarian - Langkah 1/2:\nMau cari pasangan chat gender apa?",
             Markup.inlineKeyboard([
-                [Markup.button.callback('🔍 Cari Cowok', 'find_target_cowok')],
-                [Markup.button.callback('🔍 Cari Cewek', 'find_target_cewek')]
+                [Markup.button.callback('♂️ Cari Cowok', 'find_gender_cowok')],
+                [Markup.button.callback('♀️ Cari Cewek', 'find_gender_cewek')]
             ])
         );
     } catch (err) {
@@ -98,49 +122,116 @@ bot.command('search', async (ctx) => {
     }
 });
 
-// 5. ACTION SEARCHING: Cari Match Sesuai Target Gender & Rentang Usia Sama
-bot.action(/find_target_(.+)/, async (ctx) => {
+// 3. SEARCH: Langkah 2 - Pilih Usia Target
+bot.action(/find_gender_(.+)/, async (ctx) => {
     try {
-        const selectedTarget = ctx.match[1]; 
+        const selectedGender = ctx.match[1]; 
         const usersCollection = await connectDB();
-        let user = await usersCollection.findOne({ _id: ctx.chat.id });
-
+        
+        await usersCollection.updateOne({ _id: ctx.chat.id }, { $set: { targetGender: selectedGender } });
         await ctx.answerCbQuery();
 
-        // 1. Update target pencarian user saat ini di database
-        await usersCollection.updateOne({ _id: ctx.chat.id }, { $set: { targetGender: selectedTarget } });
+        await ctx.editMessageText(
+            `Filter Pencarian - Langkah 2/2:\nTarget Gender: ${selectedGender === 'cowok' ? '♂️ Cowok' : '♀️ Cewek'}\n\nSekarang, pilih kriteria usia pasangan yang kamu inginkan:`,
+            Markup.inlineKeyboard([
+                [Markup.button.callback('🔹 17-18 thn', 'find_age_17-18'), Markup.button.callback('🔹 19-20 thn', 'find_age_19-20')],
+                [Markup.button.callback('🔹 21-22 thn', 'find_age_21-22'), Markup.button.callback('🔹 23-24 thn', 'find_age_23-24')],
+                [Markup.button.callback('🔹 25-26 thn', 'find_age_25-26'), Markup.button.callback('🔹 27-28 thn', 'find_age_27-28')],
+                [Markup.button.callback('🔹 29-30 thn', 'find_age_29-30'), Markup.button.callback('🔹 31-32 thn', 'find_age_31-32')]
+            ])
+        );
+    } catch (err) {
+        console.error(err);
+    }
+});
 
-        // 2. Cari partner di database yang memenuhi 4 SYARAT:
-        //    - Dia sedang mencari (searching: true)
-        //    - Gendernya cocok dengan yang dicari user saat ini (gender: selectedTarget)
-        //    - Kategori usianya harus sama (age: user.age)
-        //    - Target dia haruslah gender asli dari si user saat ini (targetGender: user.gender)
-        let freePartner = await usersCollection.findOne({
-            searching: true,
-            gender: selectedTarget,
-            age: user.age,
-            targetGender: user.gender,
-            _id: { $ne: ctx.chat.id }
-        });
+// 4. ACTION MATCHING UTAMA
+bot.action(/find_age_(.+)/, async (ctx) => {
+    try {
+        const selectedAge = ctx.match[1];
+        const usersCollection = await connectDB();
+        await ctx.answerCbQuery();
 
-        if (freePartner) {
-            // Berhasil jodoh, kunci status masing-masing
-            await usersCollection.updateOne({ _id: ctx.chat.id }, { $set: { partner: freePartner._id, searching: false } });
-            await usersCollection.updateOne({ _id: freePartner._id }, { $set: { partner: ctx.chat.id, searching: false } });
-            
-            await ctx.editMessageText("Pasangan ditemukan! Selamat mengobrol sepuasnya 🥳\n\nKetik /stop untuk berhenti.");
-            await bot.telegram.sendMessage(freePartner._id, "Pasangan ditemukan! Selamat mengobrol sepuasnya 🥳\n\nKetik /stop untuk berhenti.");
+        let user = await usersCollection.findOneAndUpdate(
+            { _id: ctx.chat.id },
+            { $set: { targetAge: selectedAge } },
+            { returnDocument: 'after' }
+        );
+
+        // Jika user memakai proxy objek atau findOneAndUpdate lama, ambil ulang datanya
+        if (user.value) user = user.value; 
+        else if (!user.gender) user = await usersCollection.findOne({ _id: ctx.chat.id });
+
+        const isMatched = await matchUser(ctx, usersCollection, user);
+        
+        if (isMatched) {
+            await ctx.deleteMessage();
         } else {
-            // Jika belum ada yang cocok, masuk daftar antrean tunggu
-            await usersCollection.updateOne({ _id: ctx.chat.id }, { $set: { searching: true } });
-            await ctx.editMessageText(`Mencari pasangan (${selectedTarget === 'cowok' ? '♂️ Cowok' : '♀️ Cewek'}, Usia: ${user.age} thn)... mohon tunggu sebentar.`);
+            await ctx.editMessageText(
+                `🕵️‍♂️ **Mencari pasangan...**\n🎯 Kriteria: ${user.targetGender === 'cowok' ? '♂️ Cowok' : '♀️ Cewek'} (Usia ${selectedAge} thn)\n\nMohon tunggu sampai ada yang cocok.`
+            );
         }
     } catch (err) {
         console.error("Error matching action:", err);
     }
 });
 
-// 6. STOP OBROLAN
+// 5. COMMAND /NEXT (Cari Orang Baru dengan Kriteria Sama)
+bot.command('next', async (ctx) => {
+    try {
+        const usersCollection = await connectDB();
+        let user = await usersCollection.findOne({ _id: ctx.chat.id });
+
+        if (!user || !user.targetGender || !user.targetAge) {
+            return ctx.reply("Kamu belum mengatur filter pencarian! Ketik /search terlebih dahulu.");
+        }
+
+        // Putuskan hubungan dengan pasangan lama jika ada
+        if (user.partner) {
+            const partnerId = user.partner;
+            await usersCollection.updateOne({ _id: partnerId }, { $set: { partner: null, searching: false } });
+            await bot.telegram.sendMessage(partnerId, "💔 Obrolan kamu telah dihentikan oleh pasanganmu. Ketik /next untuk cari baru atau /new untuk ganti filter.");
+        }
+
+        // Set status user menjadi mencari kembali
+        await usersCollection.updateOne({ _id: ctx.chat.id }, { $set: { partner: null, searching: true } });
+        await ctx.reply(`🔄 Mencari pasangan baru dengan kriteria tetap (${user.targetGender === 'cowok' ? '♂️ Cowok' : '♀️ Cewek'}, ${user.targetAge} thn)...`);
+        
+        // Jalankan pencarian ulang otomatis
+        await matchUser(ctx, usersCollection, user);
+    } catch (err) {
+        console.error(err);
+    }
+});
+
+// 6. COMMAND /NEW (Ganti Filter Baru)
+bot.command('new', async (ctx) => {
+    try {
+        const usersCollection = await connectDB();
+        let user = await usersCollection.findOne({ _id: ctx.chat.id });
+
+        if (user && user.partner) {
+            const partnerId = user.partner;
+            await usersCollection.updateOne({ _id: partnerId }, { $set: { partner: null, searching: false } });
+            await bot.telegram.sendMessage(partnerId, "💔 Obrolan kamu telah dihentikan oleh pasanganmu karena dia ingin mencari filter baru.");
+        }
+
+        await usersCollection.updateOne({ _id: ctx.chat.id }, { $set: { partner: null, searching: false, targetGender: null, targetAge: null } });
+        
+        // Panggil paksa alur menu /search awal
+        await ctx.reply(
+            "Filter Baru - Langkah 1/2:\nMau cari pasangan chat gender apa?",
+            Markup.inlineKeyboard([
+                [Markup.button.callback('♂️ Cari Cowok', 'find_gender_cowok')],
+                [Markup.button.callback('♀️ Cari Cewek', 'find_gender_cewek')]
+            ])
+        );
+    } catch (err) {
+        console.error(err);
+    }
+});
+
+// 7. COMMAND /STOP
 bot.command('stop', async (ctx) => {
     try {
         const usersCollection = await connectDB();
@@ -148,21 +239,21 @@ bot.command('stop', async (ctx) => {
         
         if (user && user.partner) {
             const partnerId = user.partner;
-            await usersCollection.updateOne({ _id: ctx.chat.id }, { $set: { partner: null, searching: false, targetGender: null } });
-            await usersCollection.updateOne({ _id: partnerId }, { $set: { partner: null, searching: false, targetGender: null } });
+            await usersCollection.updateOne({ _id: ctx.chat.id }, { $set: { partner: null, searching: false, targetGender: null, targetAge: null } });
+            await usersCollection.updateOne({ _id: partnerId }, { $set: { partner: null, searching: false, targetGender: null, targetAge: null } });
             
-            await bot.telegram.sendMessage(ctx.chat.id, "Kamu telah menghentikan obrolan. Ketik /search lagi untuk mencari yang baru.");
-            await bot.telegram.sendMessage(partnerId, "Pasanganmu telah menghentikan obrolan. Ketik /search lagi untuk mencari yang baru.");
+            await bot.telegram.sendMessage(ctx.chat.id, "Kamu telah menghentikan obrolan. Ketik /search untuk mencari dari awal lagi.");
+            await bot.telegram.sendMessage(partnerId, "Pasanganmu telah menghentikan obrolan. Ketik /search untuk mencari dari awal lagi.");
         } else {
-            await usersCollection.updateOne({ _id: ctx.chat.id }, { $set: { searching: false, targetGender: null } });
-            ctx.reply("Pencarian dibatalkan atau kamu sedang tidak dalam obrolan.");
+            await usersCollection.updateOne({ _id: ctx.chat.id }, { $set: { searching: false, targetGender: null, targetAge: null } });
+            ctx.reply("Pencarian dibatalkan.");
         }
     } catch (err) {
         console.error(err);
     }
 });
 
-// 7. OPER DATA PESAN CHAT
+// 8. CHAT FORWARDING
 bot.on('message', async (ctx) => {
     try {
         const usersCollection = await connectDB();
@@ -171,7 +262,7 @@ bot.on('message', async (ctx) => {
             await bot.telegram.copyMessage(user.partner, ctx.chat.id, ctx.message.message_id);
         }
     } catch (err) {
-        console.error("Error pengiriman pesan:", err);
+        console.error("Error forwarding message:", err);
     }
 });
 
