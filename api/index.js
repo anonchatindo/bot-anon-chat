@@ -14,7 +14,7 @@ async function connectDB() {
     return db;
 }
 
-// Daftarkan handler command secara global (hanya sekali)
+// Handler perintah bot
 bot.command('start', (ctx) => ctx.reply("Halo! Ketik /search untuk cari teman chat acak."));
 
 bot.command('search', async (ctx) => {
@@ -32,7 +32,7 @@ bot.command('search', async (ctx) => {
             await bot.telegram.sendMessage(freePartner._id, "Pasangan ditemukan!");
         } else {
             await usersCollection.updateOne({ _id: ctx.chat.id }, { $set: { searching: true } }, { upsert: true });
-            ctx.reply("Mencari pasangan...");
+            await ctx.reply("Mencari pasangan...");
         }
     } catch (err) {
         console.error("Error search:", err);
@@ -56,13 +56,14 @@ module.exports = async (req, res) => {
         return res.status(200).send('Bot Anon Chat Berjalan via Webhook Vercel.');
     }
 
-    // TRIK SAKTI: Langsung jawab OK ke Telegram di awal agar Telegram tidak mengirim ulang (anti-spam)
-    res.status(200).send('OK');
-
     try {
-        // Baru proses jalankan pesan bot di latar belakang
+        // Trik Serverless: Tunggu sampai seluruh proses bot (database + kirim pesan) selesai total
         await bot.handleUpdate(req.body);
+        // Setelah selesai, baru kirim sinyal OK ke Telegram
+        res.status(200).send('OK');
     } catch (err) {
         console.error("Error di Serverless Runtime:", err);
+        // Tetap kirim 200 agar Telegram tidak melakukan retry massal saat terjadi error
+        res.status(200).send('Error Handled');
     }
 };
